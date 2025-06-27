@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import re
@@ -16,6 +15,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
+    JobQueue,
 )
 
 # ---------- CONFIG ----------
@@ -25,13 +25,11 @@ FEED_URL = "https://nyaa.si/?page=rss"
 
 DEFAULT_INTERVAL = 1 * 20
 
-# Filter only by uploader
 ALLOWED_UPLOADERS = ["ToonsHub","varyg1001"]
 
 # ---------- STATE ----------
 posted_ids = set()
 check_interval = DEFAULT_INTERVAL
-periodic_task = None
 
 # ---------- LOGGING ----------
 logging.basicConfig(
@@ -131,7 +129,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def setinterval(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global check_interval, periodic_task
+    global check_interval
 
     if not context.args:
         await update.message.reply_text("Usage: /setinterval <minutes>")
@@ -144,10 +142,10 @@ async def setinterval(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         check_interval = minutes * 60
 
-        if periodic_task:
-            periodic_task.cancel()
+        # Clear and reschedule job
+        context.job_queue.jobs.clear()
+        context.job_queue.run_repeating(check_nyaa, interval=check_interval)
 
-        periodic_task = asyncio.create_task(periodic_checker(context.application))
         await update.message.reply_text(f"Interval set to {minutes} minutes.")
 
     except ValueError:
@@ -159,27 +157,15 @@ async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Manual refresh complete.")
 
 
-async def periodic_checker(application):
-    global check_interval
-
-    while True:
-        try:
-            await check_nyaa(ContextTypes.DEFAULT_TYPE(application=application))
-        except Exception as e:
-            logger.error(f"Error in periodic check: {e}")
-        await asyncio.sleep(check_interval)
-
-
 async def main():
-    global periodic_task
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setinterval", setinterval))
     app.add_handler(CommandHandler("refresh", refresh))
 
-    periodic_task = asyncio.create_task(periodic_checker(app))
+    # Schedule periodic job
+    app.job_queue.run_repeating(check_nyaa, interval=check_interval)
 
     await app.run_polling()
 
@@ -189,6 +175,7 @@ if __name__ == "__main__":
     try:
         asyncio.get_event_loop().run_until_complete(main())
     except RuntimeError:
+        # fallback for some environments
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(main())
