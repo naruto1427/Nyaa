@@ -1,2 +1,2 @@
-python-telegram-bot==21.0
-feedparser
+python-telegram-bot 
+feedparser beautifulsoup4 requests
